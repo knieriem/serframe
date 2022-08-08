@@ -1,4 +1,4 @@
-package rtu
+package serframe
 
 import (
 	"bytes"
@@ -9,7 +9,7 @@ import (
 	"github.com/knieriem/modbus"
 )
 
-type ReadMgr struct {
+type Stream struct {
 	buf         []byte
 	echo        []byte
 	req         chan []byte
@@ -23,42 +23,42 @@ type ReadMgr struct {
 
 type ReadFunc func() ([]byte, error)
 
-func NewReadMgr(rf ReadFunc, exitC chan<- error) *ReadMgr {
-	m := new(ReadMgr)
-	m.buf = make([]byte, 0, 256)
-	m.req = make(chan []byte)
-	m.done = make(chan readResult)
-	m.errC = make(chan error)
-	go m.handle(rf, exitC)
-	return m
+func NewStream(rf ReadFunc, exitC chan<- error) *Stream {
+	s := new(Stream)
+	s.buf = make([]byte, 0, 256)
+	s.req = make(chan []byte)
+	s.done = make(chan readResult)
+	s.errC = make(chan error)
+	go s.handle(rf, exitC)
+	return s
 }
 
-func (m *ReadMgr) Start() (err error) {
-	if m.eof {
+func (s *Stream) Start() (err error) {
+	if s.eof {
 		err = io.EOF
 		return
 	}
 	select {
-	case err = <-m.errC:
-		m.eof = true
+	case err = <-s.errC:
+		s.eof = true
 	default:
-		m.buf = m.buf[:0]
-		m.req <- m.buf
+		s.buf = s.buf[:0]
+		s.req <- s.buf
 	}
 	return
 }
 
-func (m *ReadMgr) Cancel() {
-	m.req <- nil
+func (s *Stream) Cancel() {
+	s.req <- nil
 }
 
-func (m *ReadMgr) Read(ctx context.Context, tMax, interframeTimeoutMax time.Duration) (buf []byte, err error) {
-	if m.eof {
+func (s *Stream) Read(ctx context.Context, tMax, interframeTimeoutMax time.Duration) (buf []byte, err error) {
+	if s.eof {
 		err = io.EOF
 		return
 	}
 	bufok := false
-	if m.CheckBytes == nil {
+	if s.CheckBytes == nil {
 		bufok = true
 	}
 	nto := 0
@@ -69,43 +69,43 @@ func (m *ReadMgr) Read(ctx context.Context, tMax, interframeTimeoutMax time.Dura
 readLoop:
 	for {
 		select {
-		case r := <-m.done:
-			nb := len(m.buf)
-			m.buf = r.data
-			if m.CheckBytes != nil && m.echo == nil {
-				bufok = m.CheckBytes(m.buf[nb:], m.buf[nSkip:])
+		case r := <-s.done:
+			nb := len(s.buf)
+			s.buf = r.data
+			if s.CheckBytes != nil && s.echo == nil {
+				bufok = s.CheckBytes(s.buf[nb:], s.buf[nSkip:])
 			}
 			if !timeout.Stop() {
 				<-timeout.C
 			}
 			if r.err != nil {
 				err = r.err
-				close(m.req)
-				m.eof = true
+				close(s.req)
+				s.eof = true
 				return
 			}
 		reeval:
-			if m.echo != nil {
-				nEcho := len(m.echo)
-				if len(m.buf) >= nEcho {
-					tail := m.buf[nEcho:]
-					if m.CheckBytes != nil && len(tail) != 0 {
-						bufok = m.CheckBytes(tail, m.buf[nSkip:])
+			if s.echo != nil {
+				nEcho := len(s.echo)
+				if len(s.buf) >= nEcho {
+					tail := s.buf[nEcho:]
+					if s.CheckBytes != nil && len(tail) != 0 {
+						bufok = s.CheckBytes(tail, s.buf[nSkip:])
 					}
-					if !bytes.Equal(m.buf[:nEcho], m.echo) {
+					if !bytes.Equal(s.buf[:nEcho], s.echo) {
 						err = modbus.ErrEchoMismatch
 						break readLoop
 					}
 					nSkip = nEcho
-					m.echo = nil
+					s.echo = nil
 					if len(tail) != 0 {
 						goto reeval
 					}
 				}
 				timeout.Reset(tMax)
 				break
-			} else if m.MsgComplete != nil {
-				if m.MsgComplete(m.buf[nSkip:]) {
+			} else if s.MsgComplete != nil {
+				if s.MsgComplete(s.buf[nSkip:]) {
 					break readLoop
 				}
 			}
@@ -116,13 +116,13 @@ readLoop:
 			timeout.Reset(interframeTimeout)
 
 		case <-timeout.C:
-			if m.echo != nil {
-				if len(m.buf[nSkip:]) != 0 {
+			if s.echo != nil {
+				if len(s.buf[nSkip:]) != 0 {
 					err = modbus.ErrInvalidEchoLen
 				} else {
 					err = modbus.ErrTimeout
 				}
-			} else if len(m.buf[nSkip:]) != 0 && !bufok && nto < ntoMax {
+			} else if len(s.buf[nSkip:]) != 0 && !bufok && nto < ntoMax {
 				nto++
 				timeout.Reset(interframeTimeout)
 				continue
@@ -133,9 +133,9 @@ readLoop:
 			break readLoop
 		}
 	}
-	m.req <- nil
+	s.req <- nil
 
-	buf = m.buf[nSkip:]
+	buf = s.buf[nSkip:]
 	if err == nil && len(buf) == 0 {
 		err = modbus.ErrTimeout
 	}
@@ -147,7 +147,7 @@ type readResult struct {
 	err  error
 }
 
-func (m *ReadMgr) handle(read ReadFunc, exitC chan<- error) {
+func (s *Stream) handle(read ReadFunc, exitC chan<- error) {
 	var termErr error
 	var dest []byte
 	var errC chan<- error
@@ -174,14 +174,14 @@ loop:
 		case errC <- termErr:
 			close(errC)
 			break loop
-		case dest = <-m.req:
+		case dest = <-s.req:
 		case r, dataOk := <-data:
 			if dest != nil {
 				if r.err == nil {
 					dest = append(dest, r.data...)
 				}
-			} else if m.Forward != nil {
-				m.Forward.Write(r.data)
+			} else if s.Forward != nil {
+				s.Forward.Write(r.data)
 			}
 			if dataOk {
 				data <- readResult{}
@@ -190,22 +190,22 @@ loop:
 			}
 			if dest != nil {
 				select {
-				case m.done <- readResult{dest, r.err}:
+				case s.done <- readResult{dest, r.err}:
 					if r.err != nil {
 						break loop
 					}
-				case b := <-m.req:
-					if m.Forward != nil {
-						m.Forward.Write(dest)
+				case b := <-s.req:
+					if s.Forward != nil {
+						s.Forward.Write(dest)
 					}
 					dest = b
 				}
 			}
 			if r.err != nil && errC == nil {
 				termErr = r.err
-				errC = m.errC
+				errC = s.errC
 			}
 		}
 	}
-	close(m.done)
+	close(s.done)
 }
