@@ -94,10 +94,11 @@ func (s *Stream) CancelReception() {
 type ReceptionOption func(*receptionParams)
 
 type receptionParams struct {
-	tMax                 time.Duration
-	interframeTimeoutMax time.Duration
-	intercept            FrameInterceptor
-	echo                 []byte
+	tMax                time.Duration
+	interByteTimeout    time.Duration
+	interByteTimeoutMax time.Duration
+	intercept           FrameInterceptor
+	echo                []byte
 }
 
 func (p *receptionParams) setup(dflt *receptionParams, opts ...ReceptionOption) *receptionParams {
@@ -110,6 +111,14 @@ func (p *receptionParams) setup(dflt *receptionParams, opts ...ReceptionOption) 
 	return p
 }
 
+func (p *receptionParams) extInterByteTimeoutSteps() int {
+	ito := p.interByteTimeout
+	if ito == 0 {
+		return 0
+	}
+	return int((p.interByteTimeoutMax + ito - 1) / ito)
+}
+
 // WithInitialTimeout configures the timeout that is active
 // before the first byte of a frame has been received.
 // A value of zero deactivates the timeout, which is
@@ -120,9 +129,33 @@ func WithInitialTimeout(t time.Duration) ReceptionOption {
 	}
 }
 
-func WithInterframeTimeout(t time.Duration) ReceptionOption {
+// The InterByteTimeout is the time that is allowed to elapse after
+// a byte has been received before a frame is considered complete.
+//
+// On a pc system there may be the case that this timeout elapsed
+// but the goroutine reading bytes from the stream didn't have a
+// chance to know about new bytes waiting to be read --
+// as a result, frames may appear truncated. To work around this
+// problem, while allowing to keep the inter byte timeout short,
+// a combination of an extended inter-byte timeout and
+// a frame interceptor may be used; see options WithExtInterByteTimeout
+// and WithFrameInterceptor.
+func WithInterByteTimeout(t time.Duration) ReceptionOption {
 	return func(p *receptionParams) {
-		p.interframeTimeoutMax = t
+		p.interByteTimeout = t
+	}
+}
+
+// WithExtInterByteTimeout extends the duration of the normal inter-byte
+// timeout to the specified value, in case a FrameInterceptor has been
+// configured. A frame will be considered complete, after both at least the
+// normal inter-byte timeout has elapsed, and the interceptor signals Complete.
+func WithExtInterByteTimeout(t time.Duration) ReceptionOption {
+	return func(p *receptionParams) {
+		p.interByteTimeoutMax = t
+		if p.interByteTimeout == 0 {
+			p.interByteTimeout = t
+		}
 	}
 }
 
@@ -165,8 +198,7 @@ func (s *Stream) ReadFrame(ctx context.Context, opts ...ReceptionOption) (buf []
 		frameStatus = Complete
 	}
 	nto := 0
-	interframeTimeout := 1750 * time.Microsecond
-	ntoMax := int((par.interframeTimeoutMax + interframeTimeout - 1) / interframeTimeout)
+	ntoMax := par.extInterByteTimeoutSteps()
 	timeout := newTimer(par.tMax)
 	nSkip := 0
 readLoop:
@@ -216,11 +248,11 @@ readLoop:
 			} else if frameStatus == CompleteSkipTimeout {
 				break readLoop
 			}
-			if par.interframeTimeoutMax == 0 {
+			if par.interByteTimeout == 0 {
 				break readLoop
 			}
 			nto = 0
-			timeout.Reset(interframeTimeout)
+			timeout.Reset(par.interByteTimeout)
 
 		case <-timeout.C:
 			if par.echo != nil {
@@ -231,7 +263,7 @@ readLoop:
 				}
 			} else if len(s.buf[nSkip:]) != 0 && frameStatus != Complete && nto < ntoMax {
 				nto++
-				timeout.Reset(interframeTimeout)
+				timeout.Reset(par.interByteTimeout)
 				continue
 			}
 			break readLoop
