@@ -98,8 +98,7 @@ type ReceptionOption func(*receptionParams)
 type receptionParams struct {
 	tMax                 time.Duration
 	interframeTimeoutMax time.Duration
-	frameValid           FrameValidationFunc
-	skipTimeout          bool
+	intercept            FrameInterceptor
 	echo                 []byte
 }
 
@@ -128,20 +127,28 @@ func WithInterframeTimeout(t time.Duration) ReceptionOption {
 	}
 }
 
-type FrameValidationFunc func(bnew []byte, msg []byte) bool
+// A FrameInterceptor is called every time new bytes have been received and
+// appended to the current frame. The interceptor may infer from the content
+// of curFrame, whether it can be considered complete or not,
+// and return an corresponding frame status, and, if appropriate, an error.
+// NewPart might be used, for example, to calculate a hash in parallel.
+type FrameInterceptor func(curFrame, newPart []byte) (FrameStatus, error)
 
-func WithFrameValidation(f FrameValidationFunc) ReceptionOption {
+func WithFrameInterceptor(f FrameInterceptor) ReceptionOption {
 	return func(p *receptionParams) {
-		p.frameValid = f
+		p.intercept = f
 	}
 }
 
-func SkipTimeoutIfValid() ReceptionOption {
-	return func(p *receptionParams) {
-		p.skipTimeout = true
-	}
-}
+type FrameStatus int
 
+const (
+	None FrameStatus = iota
+	Complete
+	CompleteSkipTimeout
+)
+
+// WithLocalEcho sets the data that is expected to be received first
 func WithLocalEcho(echo []byte) ReceptionOption {
 	return func(p *receptionParams) {
 		p.echo = echo
@@ -154,9 +161,9 @@ func (s *Stream) ReadFrame(ctx context.Context, opts ...ReceptionOption) (buf []
 		return
 	}
 	par := s.curParams.setup(&s.globalParams, opts...)
-	bufok := false
-	if par.frameValid == nil {
-		bufok = true
+	frameStatus := None
+	if par.intercept == nil {
+		frameStatus = Complete
 	}
 	nto := 0
 	interframeTimeout := 1750 * time.Microsecond
@@ -169,8 +176,11 @@ readLoop:
 		case r := <-s.done:
 			nb := len(s.buf)
 			s.buf = r.data
-			if par.frameValid != nil && par.echo == nil {
-				bufok = par.frameValid(s.buf[nb:], s.buf[nSkip:])
+			if par.intercept != nil && par.echo == nil {
+				frameStatus, err = par.intercept(s.buf[nSkip:], s.buf[nb:])
+				if err != nil {
+					break readLoop
+				}
 			}
 			if !timeout.Stop() {
 				<-timeout.C
@@ -186,8 +196,11 @@ readLoop:
 				nEcho := len(par.echo)
 				if len(s.buf) >= nEcho {
 					tail := s.buf[nEcho:]
-					if par.frameValid != nil && len(tail) != 0 {
-						bufok = par.frameValid(tail, s.buf[nSkip:])
+					if par.intercept != nil && len(tail) != 0 {
+						frameStatus, err = par.intercept(s.buf[nSkip:], tail)
+						if err != nil {
+							break readLoop
+						}
 					}
 					if !bytes.Equal(s.buf[:nEcho], par.echo) {
 						err = modbus.ErrEchoMismatch
@@ -201,7 +214,7 @@ readLoop:
 				}
 				timeout.Reset(par.tMax)
 				break
-			} else if bufok && par.skipTimeout {
+			} else if frameStatus == CompleteSkipTimeout {
 				break readLoop
 			}
 			if par.interframeTimeoutMax == 0 {
@@ -217,7 +230,7 @@ readLoop:
 				} else {
 					err = ErrTimeout
 				}
-			} else if len(s.buf[nSkip:]) != 0 && !bufok && nto < ntoMax {
+			} else if len(s.buf[nSkip:]) != 0 && frameStatus != Complete && nto < ntoMax {
 				nto++
 				timeout.Reset(interframeTimeout)
 				continue
