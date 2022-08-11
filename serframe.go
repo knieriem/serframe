@@ -12,7 +12,6 @@ import (
 type Stream struct {
 	buf          []byte
 	eof          bool
-	MsgComplete  func([]byte) bool
 	globalParams receptionParams
 	curParams    receptionParams
 
