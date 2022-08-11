@@ -98,7 +98,7 @@ type receptionParams struct {
 	interByteTimeout    time.Duration
 	interByteTimeoutMax time.Duration
 	intercept           FrameInterceptor
-	echo                []byte
+	expectedEcho                []byte
 }
 
 func (p *receptionParams) setup(dflt *receptionParams, opts ...ReceptionOption) *receptionParams {
@@ -181,9 +181,12 @@ const (
 )
 
 // WithLocalEcho sets the data that is expected to be received first
-func WithLocalEcho(echo []byte) ReceptionOption {
+// -- because of an activated local echo mechanism --,
+// before receiving an actual frame.
+// ReadFrame will detect, then skip this echo data.
+func WithLocalEcho(expectedEcho []byte) ReceptionOption {
 	return func(p *receptionParams) {
-		p.echo = echo
+		p.expectedEcho = expectedEcho
 	}
 }
 
@@ -207,7 +210,7 @@ readLoop:
 		case r := <-s.done:
 			nb := len(s.buf)
 			s.buf = r.data
-			if par.intercept != nil && par.echo == nil {
+			if par.intercept != nil && par.expectedEcho == nil {
 				frameStatus, err = par.intercept(s.buf[nSkip:], s.buf[nb:])
 				if err != nil {
 					break readLoop
@@ -223,8 +226,8 @@ readLoop:
 				return
 			}
 		reeval:
-			if par.echo != nil {
-				nEcho := len(par.echo)
+			if par.expectedEcho != nil {
+				nEcho := len(par.expectedEcho)
 				if len(s.buf) >= nEcho {
 					tail := s.buf[nEcho:]
 					if par.intercept != nil && len(tail) != 0 {
@@ -233,12 +236,12 @@ readLoop:
 							break readLoop
 						}
 					}
-					if !bytes.Equal(s.buf[:nEcho], par.echo) {
+					if !bytes.Equal(s.buf[:nEcho], par.expectedEcho) {
 						err = modbus.ErrEchoMismatch
 						break readLoop
 					}
 					nSkip = nEcho
-					par.echo = nil
+					par.expectedEcho = nil
 					if len(tail) != 0 {
 						goto reeval
 					}
@@ -255,7 +258,7 @@ readLoop:
 			timeout.Reset(par.interByteTimeout)
 
 		case <-timeout.C:
-			if par.echo != nil {
+			if par.expectedEcho != nil {
 				if len(s.buf[nSkip:]) != 0 {
 					err = ErrInvalidEchoLen
 				} else {
