@@ -33,7 +33,6 @@ func NewStream(r io.Reader, opts ...Option) *Stream {
 	s.req = make(chan []byte)
 	s.done = make(chan readResult)
 	s.errC = make(chan error)
-	s.globalParams.tMax = time.Second
 	s.r = r
 
 	s.internalBufSize = 64
@@ -111,11 +110,12 @@ func (p *receptionParams) setup(dflt *receptionParams, opts ...ReceptionOption) 
 	return p
 }
 
+// WithInitialTimeout configures the timeout that is active
+// before the first byte of a frame has been received.
+// A value of zero deactivates the timeout, which is
+// also the default.
 func WithInitialTimeout(t time.Duration) ReceptionOption {
 	return func(p *receptionParams) {
-		if t == 0 {
-			return
-		}
 		p.tMax = t
 	}
 }
@@ -167,7 +167,7 @@ func (s *Stream) ReadFrame(ctx context.Context, opts ...ReceptionOption) (buf []
 	nto := 0
 	interframeTimeout := 1750 * time.Microsecond
 	ntoMax := int((par.interframeTimeoutMax + interframeTimeout - 1) / interframeTimeout)
-	timeout := time.NewTimer(par.tMax)
+	timeout := newTimer(par.tMax)
 	nSkip := 0
 readLoop:
 	for {
@@ -338,4 +338,39 @@ type Error string
 
 func (e Error) Error() string {
 	return "serframe: " + string(e)
+}
+
+// timer wraps a time.Timer, deferring initialization
+// in case duration is zero
+type timer struct {
+	tim *time.Timer
+	C   <-chan time.Time
+}
+
+func newTimer(d time.Duration) *timer {
+	t := new(timer)
+	if d != 0 {
+		t.tim = time.NewTimer(d)
+		t.C = t.tim.C
+	}
+	return t
+}
+
+func (t *timer) Reset(d time.Duration) bool {
+	if t.tim == nil {
+		if d == 0 {
+			return false
+		}
+		t.tim = time.NewTimer(d)
+		t.C = t.tim.C
+		return false
+	}
+	return t.tim.Reset(d)
+}
+
+func (t *timer) Stop() bool {
+	if t.tim == nil {
+		return true
+	}
+	return t.tim.Stop()
 }
