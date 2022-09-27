@@ -69,20 +69,20 @@ func WithReceptionOptions(opts ...ReceptionOption) Option {
 	}
 }
 
-func (s *Stream) StartReception(buf []byte, opts ...ReceptionOption) (err error) {
+func (s *Stream) StartReception(buf []byte, opts ...ReceptionOption) error {
 	if s.eof {
-		err = io.EOF
-		return
+		return io.EOF
 	}
 	select {
-	case err = <-s.errC:
+	case err := <-s.errC:
 		s.eof = true
+		return err
 	default:
 		s.curParams.setup(&s.globalParams, opts...)
 		s.buf = buf[:0:len(buf)]
 		s.req <- s.buf
 	}
-	return
+	return nil
 }
 
 func (s *Stream) CancelReception() {
@@ -190,8 +190,7 @@ func WithLocalEcho(expectedEcho []byte) ReceptionOption {
 
 func (s *Stream) ReadFrame(ctx context.Context, opts ...ReceptionOption) (buf []byte, err error) {
 	if s.eof {
-		err = io.EOF
-		return
+		return nil, io.EOF
 	}
 	par := s.curParams.setup(&s.globalParams, opts...)
 	frameStatus := None
@@ -218,10 +217,9 @@ readLoop:
 				<-timeout.C
 			}
 			if r.err != nil {
-				err = r.err
 				close(s.req)
 				s.eof = true
-				return
+				return nil, r.err
 			}
 		reeval:
 			if par.expectedEcho != nil {
@@ -277,9 +275,9 @@ readLoop:
 
 	buf = s.buf[nSkip:]
 	if err == nil && len(buf) == 0 {
-		err = ErrTimeout
+		return nil, ErrTimeout
 	}
-	return
+	return buf, err
 }
 
 type readResult struct {
