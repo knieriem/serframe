@@ -69,6 +69,25 @@ func WithReceptionOptions(opts ...ReceptionOption) Option {
 	}
 }
 
+// StartReception starts the handling of another data frame,
+// that will be stored in buf; a byte received after calling
+// this function is regarded the first byte of the new frame.
+// The actual reception of the frame will be done in the
+// following call to ReadFrame.
+// Bytes received before StartReception gets called
+// are considered unsolicited.
+//
+// When implementing a request/response scheme,
+// e.g. when communicating to a device, StartReception
+// should be called just before Writing the request.
+// If calling it after the Write it could happen that the call to Write
+// has not returned yet, but the first bytes of the device's response
+// frame have already been received by the host system;
+// subsequently, ReadFrame could miss the first bytes of
+// the response frame.
+//
+// If the underlying io.Reader returned an io.EOF or another
+// error previously, StartReception returns that error.
 func (s *Stream) StartReception(buf []byte, opts ...ReceptionOption) error {
 	if s.eof {
 		return io.EOF
@@ -85,6 +104,9 @@ func (s *Stream) StartReception(buf []byte, opts ...ReceptionOption) error {
 	return nil
 }
 
+// CancelReception reverts a previous call to StartReception.
+// It should be called in case ReadFrame won't be called
+// for some reason.
 func (s *Stream) CancelReception() {
 	s.req <- nil
 }
