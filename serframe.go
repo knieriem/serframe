@@ -118,7 +118,7 @@ type receptionParams struct {
 	interByteTimeout    time.Duration
 	interByteTimeoutMax time.Duration
 	intercept           FrameInterceptor
-	expectedEcho                []byte
+	expectedEcho        []byte
 }
 
 func (p *receptionParams) setup(dflt *receptionParams, opts ...ReceptionOption) *receptionParams {
