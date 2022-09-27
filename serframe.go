@@ -5,8 +5,6 @@ import (
 	"context"
 	"io"
 	"time"
-
-	"github.com/knieriem/modbus"
 )
 
 type Stream struct {
@@ -237,7 +235,7 @@ readLoop:
 						}
 					}
 					if !bytes.Equal(s.buf[:nEcho], par.expectedEcho) {
-						err = modbus.ErrEchoMismatch
+						err = ErrEchoMismatch
 						break readLoop
 					}
 					nSkip = nEcho
