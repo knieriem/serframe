@@ -249,7 +249,7 @@ readLoop:
 				if len(s.buf) >= nEcho {
 					tail := s.buf[nEcho:]
 					if par.intercept != nil && len(tail) != 0 {
-						frameStatus, err = par.intercept(s.buf[nSkip:], tail)
+						frameStatus, err = par.intercept(s.buf[nEcho:], tail)
 						if err != nil {
 							break readLoop
 						}
