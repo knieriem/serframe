@@ -214,7 +214,7 @@ func (s *Stream) ReadFrame(ctx context.Context, opts ...ReceptionOption) (buf []
 	if s.eof {
 		return nil, io.EOF
 	}
-	par := s.curParams.setup(&s.globalParams, opts...)
+	par := s.curParams.setup(nil, opts...)
 	frameStatus := None
 	if par.intercept == nil {
 		frameStatus = Complete
