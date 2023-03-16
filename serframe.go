@@ -118,7 +118,9 @@ type receptionParams struct {
 	interByteTimeout    time.Duration
 	interByteTimeoutMax time.Duration
 	intercept           FrameInterceptor
-	expectedEcho        []byte
+
+	expectedEcho             []byte
+	echoSkipInitialNullBytes bool
 }
 
 func (p *receptionParams) setup(dflt *receptionParams, opts ...ReceptionOption) *receptionParams {
@@ -210,6 +212,22 @@ func WithLocalEcho(expectedEcho []byte) ReceptionOption {
 	}
 }
 
+// SkipInitialEchoNullBytes skips null bytes received prior
+// an echo of sent data. These null bytes may occur when,
+// as part of a protocol, a short break condition,
+// slightly larger than a zero byte, gets issued on the bus to
+// initiate a request. In case this break condition is
+// misinterpeted as a zero byte it will show up at the start of
+// the received data just before the echoed request.
+// If [WithLocalEcho] is used, this option enables detecting
+// and removing these zero bytes; protocols not based on
+// per-request break conditions won't need it.
+func SkipInitialEchoNullBytes() ReceptionOption {
+	return func(p *receptionParams) {
+		p.echoSkipInitialNullBytes = true
+	}
+}
+
 func (s *Stream) ReadFrame(ctx context.Context, opts ...ReceptionOption) (buf []byte, err error) {
 	if s.eof {
 		return nil, io.EOF
@@ -218,6 +236,12 @@ func (s *Stream) ReadFrame(ctx context.Context, opts ...ReceptionOption) (buf []
 	frameStatus := None
 	if par.intercept == nil {
 		frameStatus = Complete
+	}
+	echoSkipInitialNullBytes := false
+	if par.echoSkipInitialNullBytes {
+		if xe := par.expectedEcho; xe != nil && xe[0] != 0 {
+			echoSkipInitialNullBytes = true
+		}
 	}
 	nto := 0
 	ntoMax := par.extInterByteTimeoutSteps()
@@ -245,7 +269,20 @@ readLoop:
 			}
 		reeval:
 			if par.expectedEcho != nil {
-				nEcho := len(par.expectedEcho)
+				echoPrefixLen := 0
+				if echoSkipInitialNullBytes && len(s.buf) >= 2 {
+					for i, b := range s.buf {
+						if b == 0 {
+							continue
+						}
+						if b == par.expectedEcho[0] {
+							echoPrefixLen = i
+						}
+						break
+					}
+					echoSkipInitialNullBytes = false
+				}
+				nEcho := echoPrefixLen + len(par.expectedEcho)
 				if len(s.buf) >= nEcho {
 					tail := s.buf[nEcho:]
 					if par.intercept != nil && len(tail) != 0 {
@@ -254,7 +291,7 @@ readLoop:
 							break readLoop
 						}
 					}
-					if !bytes.Equal(s.buf[:nEcho], par.expectedEcho) {
+					if !bytes.Equal(s.buf[echoPrefixLen:nEcho], par.expectedEcho) {
 						err = ErrEchoMismatch
 						break readLoop
 					}
@@ -277,7 +314,16 @@ readLoop:
 
 		case <-timeout.C:
 			if par.expectedEcho != nil {
-				if len(s.buf[nSkip:]) != 0 {
+				if len(s.buf) != 0 {
+					if echoSkipInitialNullBytes {
+						for _, b := range s.buf {
+							if b != 0 {
+								err = ErrInvalidEchoLen
+								break readLoop
+							}
+						}
+						err = ErrTimeout
+					}
 					err = ErrInvalidEchoLen
 				} else {
 					err = ErrTimeout
