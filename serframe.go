@@ -14,9 +14,9 @@ type Stream struct {
 	curParams    receptionParams
 
 	// internal read handler
-	req  chan []byte
-	done chan readResult
-	errC chan error
+	req   chan []byte
+	input chan readResult
+	errC  chan error
 
 	r               io.Reader
 	internalBuf     []byte
@@ -29,7 +29,7 @@ type Stream struct {
 func NewStream(r io.Reader, opts ...Option) *Stream {
 	s := new(Stream)
 	s.req = make(chan []byte)
-	s.done = make(chan readResult)
+	s.input = make(chan readResult)
 	s.errC = make(chan error)
 	s.r = r
 
@@ -250,7 +250,7 @@ func (s *Stream) ReadFrame(ctx context.Context, opts ...ReceptionOption) (buf []
 readLoop:
 	for {
 		select {
-		case r := <-s.done:
+		case r := <-s.input:
 			nb := len(s.buf)
 			s.buf = r.data
 			if par.intercept != nil && par.expectedEcho == nil {
@@ -408,7 +408,7 @@ loop:
 			}
 			if dest != nil {
 				select {
-				case s.done <- readResult{dest, err}:
+				case s.input <- readResult{dest, err}:
 					if r.err != nil {
 						break loop
 					}
@@ -425,7 +425,7 @@ loop:
 			}
 		}
 	}
-	close(s.done)
+	close(s.input)
 }
 
 var ErrTimeout = Error("timeout")
