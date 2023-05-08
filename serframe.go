@@ -121,6 +121,7 @@ type receptionParams struct {
 
 	expectedEcho             []byte
 	echoSkipInitialNullBytes bool
+	expectNoReply            bool
 }
 
 func (p *receptionParams) setup(dflt *receptionParams, opts ...ReceptionOption) *receptionParams {
@@ -228,6 +229,17 @@ func SkipInitialEchoNullBytes() ReceptionOption {
 	}
 }
 
+// ExpectNoReply configures the reception to expect no reply,
+// as it might be the case for broadcast requests.
+// ReadFrame will return after the configured initial timeout,
+// if no bytes have been received,
+// otherwise it will return ErrUnexpectedReply.
+func ExpectNoReply() ReceptionOption {
+	return func(p *receptionParams) {
+		p.expectNoReply = true
+	}
+}
+
 func (s *Stream) ReadFrame(ctx context.Context, opts ...ReceptionOption) (buf []byte, err error) {
 	if s.eof {
 		return nil, io.EOF
@@ -328,10 +340,15 @@ readLoop:
 				} else {
 					err = ErrTimeout
 				}
-			} else if len(s.buf[nSkip:]) != 0 && frameStatus != Complete && nto < ntoMax {
-				nto++
-				timeout.Reset(par.interByteTimeout)
-				continue
+			} else if len(s.buf[nSkip:]) != 0 {
+				if frameStatus != Complete && nto < ntoMax {
+					nto++
+					timeout.Reset(par.interByteTimeout)
+					continue
+				}
+				if par.expectNoReply {
+					err = ErrUnexpectedReply
+				}
 			}
 			break readLoop
 		case <-ctx.Done():
@@ -342,7 +359,7 @@ readLoop:
 	s.req <- nil
 
 	buf = s.buf[nSkip:]
-	if err == nil && len(buf) == 0 {
+	if err == nil && len(buf) == 0 && !par.expectNoReply {
 		return nil, ErrTimeout
 	}
 	return buf, err
@@ -432,6 +449,7 @@ var ErrTimeout = Error("timeout")
 var ErrEchoMismatch = Error("local echo mismatch")
 var ErrInvalidEchoLen = Error("invalid local echo length")
 var ErrOverflow = Error("receive buffer overflow")
+var ErrUnexpectedReply = Error("unexpected reply")
 
 type Error string
 
