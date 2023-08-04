@@ -7,6 +7,7 @@ import (
 	"time"
 )
 
+// Stream is an object byte frames can be read from.
 type Stream struct {
 	buf          []byte
 	eof          bool
@@ -25,6 +26,7 @@ type Stream struct {
 	ExitC <-chan error
 }
 
+// NewStream creates a new Stream from the given io.Reader.
 func NewStream(r io.Reader, opts ...Option) *Stream {
 	s := new(Stream)
 	s.req = make(chan []byte)
@@ -61,6 +63,9 @@ func ForwardUnsolicited(w io.Writer) Option {
 	}
 }
 
+// WithInternalBufSize sets the size of the internal buffer
+// used to read from the underlying io.Reader.
+// The default is 64 bytes.
 func WithInternalBufSize(n int) Option {
 	return func(s *Stream) {
 		if n == 0 {
@@ -81,6 +86,9 @@ func WithInternalReadBytesFunc(readBytes func() ([]byte, error)) Option {
 	}
 }
 
+// WithReceptionOptions allows to specifiy ReceptionOptions
+// globally when creating the Stream object. These settings may
+// be overridden later.
 func WithReceptionOptions(opts ...ReceptionOption) Option {
 	return func(s *Stream) {
 		s.globalParams.setup(nil, opts...)
