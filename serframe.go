@@ -57,6 +57,9 @@ func NewStream(r io.Reader, opts ...Option) *Stream {
 
 type Option func(*Stream)
 
+// ForwardUnsolicited configures the stream to forward
+// bytes received without a prior call to StartReception
+// to the given io.Writer.
 func ForwardUnsolicited(w io.Writer) Option {
 	return func(s *Stream) {
 		s.forward = w
