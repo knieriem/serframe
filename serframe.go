@@ -266,7 +266,13 @@ func ExpectNoReply() ReceptionOption {
 	}
 }
 
-func (s *Stream) ReadFrame(ctx context.Context, opts ...ReceptionOption) (buf []byte, err error) {
+// ReadFrame reads the next frame from the stream. On success,
+// it returns the frame content as a byte slice,
+// otherwise an error will be returned.
+// The returned slice's underlying buffer is the one passed
+// to StartReception.
+func (s *Stream) ReadFrame(ctx context.Context, opts ...ReceptionOption) ([]byte, error) {
+	var err error
 	if s.eof {
 		return nil, io.EOF
 	}
@@ -384,11 +390,11 @@ readLoop:
 	}
 	s.req <- nil
 
-	buf = s.buf[nSkip:]
-	if err == nil && len(buf) == 0 && !par.expectNoReply {
+	data := s.buf[nSkip:]
+	if err == nil && len(data) == 0 && !par.expectNoReply {
 		return nil, ErrTimeout
 	}
-	return buf, err
+	return data, err
 }
 
 type readResult struct {
