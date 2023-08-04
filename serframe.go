@@ -18,10 +18,9 @@ type Stream struct {
 	input chan readResult
 	errC  chan error
 
-	r               io.Reader
-	internalBuf     []byte
-	internalBufSize int
-	forward         io.Writer
+	readBytesInternal func() ([]byte, error)
+	internalBufSize   int
+	forward           io.Writer
 
 	ExitC <-chan error
 }
@@ -31,13 +30,21 @@ func NewStream(r io.Reader, opts ...Option) *Stream {
 	s.req = make(chan []byte)
 	s.input = make(chan readResult)
 	s.errC = make(chan error)
-	s.r = r
 
 	s.internalBufSize = 64
 	for _, o := range opts {
 		o(s)
 	}
-	s.internalBuf = make([]byte, s.internalBufSize)
+	if s.readBytesInternal == nil {
+		buf := make([]byte, s.internalBufSize)
+		s.readBytesInternal = func() ([]byte, error) {
+			n, err := r.Read(buf)
+			if err != nil {
+				return nil, err
+			}
+			return buf[:n], nil
+		}
+	}
 
 	exitC := make(chan error, 1)
 	s.ExitC = exitC
@@ -60,6 +67,17 @@ func WithInternalBufSize(n int) Option {
 			return
 		}
 		s.internalBufSize = n
+	}
+}
+
+// WithInternalReadBytesFunc specifies that bytes should not
+// be read from the io.Reader provided as argument to NewStream,
+// but rather be read from the given function.
+// This is useful when the instance providing bytes does not implement
+// an io.Reader interface.
+func WithInternalReadBytesFunc(readBytes func() ([]byte, error)) Option {
+	return func(s *Stream) {
+		s.readBytesInternal = readBytes
 	}
 }
 
@@ -379,12 +397,9 @@ func (s *Stream) handle(exitC chan<- error) {
 	go func() {
 		var err error
 		for {
-			buf := s.internalBuf
-			n, err1 := s.r.Read(buf)
+			buf, err1 := s.readBytesInternal()
 			if err1 != nil {
 				buf = nil
-			} else {
-				buf = buf[:n]
 			}
 			data <- readResult{buf, err1}
 			<-data
