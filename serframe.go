@@ -3,6 +3,7 @@ package serframe
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"time"
 )
@@ -17,7 +18,7 @@ type Stream struct {
 	// internal read handler
 	req   chan []byte
 	input chan readResult
-	errC  chan error
+	eofC  chan struct{}
 
 	readBytesInternal func() ([]byte, error)
 	internalBufSize   int
@@ -31,7 +32,7 @@ func NewStream(r io.Reader, opts ...Option) *Stream {
 	s := new(Stream)
 	s.req = make(chan []byte)
 	s.input = make(chan readResult)
-	s.errC = make(chan error)
+	s.eofC = make(chan struct{})
 
 	s.internalBufSize = 64
 	for _, o := range opts {
@@ -115,16 +116,16 @@ func WithReceptionOptions(opts ...ReceptionOption) Option {
 // subsequently, ReadFrame could miss the first bytes of
 // the response frame.
 //
-// If the underlying io.Reader returned an io.EOF or another
-// error previously, StartReception returns that error.
+// If the underlying io.Reader returned an io.EOF previously,
+// StartReception returns io.EOF.
 func (s *Stream) StartReception(buf []byte, opts ...ReceptionOption) error {
 	if s.eof {
 		return io.EOF
 	}
 	select {
-	case err := <-s.errC:
+	case <-s.eofC:
 		s.eof = true
-		return err
+		return io.EOF
 	default:
 		s.curParams.setup(&s.globalParams, opts...)
 		s.buf = buf[:0:len(buf)]
@@ -297,7 +298,15 @@ func (s *Stream) ReadFrame(ctx context.Context, opts ...ReceptionOption) ([]byte
 readLoop:
 	for {
 		select {
-		case r := <-s.input:
+		case r, ok := <-s.input:
+			if !ok {
+				s.eof = true
+				return nil, io.EOF
+			}
+			if r.err != nil {
+				err = r.err
+				break readLoop
+			}
 			nb := len(s.buf)
 			s.buf = r.data
 			if par.intercept != nil && par.expectedEcho == nil {
@@ -308,11 +317,6 @@ readLoop:
 			}
 			if !timeout.Stop() {
 				<-timeout.C
-			}
-			if r.err != nil {
-				close(s.req)
-				s.eof = true
-				return nil, r.err
 			}
 		reeval:
 			if par.expectedEcho != nil {
@@ -406,37 +410,40 @@ type readResult struct {
 }
 
 func (s *Stream) handle(exitC chan<- error) {
-	var termErr error
 	var dest []byte
-	var errC chan<- error
 
 	data := make(chan readResult)
 	go func() {
-		var err error
 		for {
-			buf, err1 := s.readBytesInternal()
-			if err1 != nil {
-				buf = nil
+			isEOF := false
+			buf, err := s.readBytesInternal()
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					isEOF = true
+					err = nil
+				}
 			}
-			data <- readResult{buf, err1}
-			<-data
-			if err1 != nil {
-				err = err1
-				break
+			if len(buf) != 0 {
+				data <- readResult{buf, err}
+				<-data
+			}
+			if isEOF {
+				close(data)
+				exitC <- io.EOF
+				return
 			}
 		}
-		close(data)
-		exitC <- err
 	}()
 
 loop:
 	for {
 		select {
-		case errC <- termErr:
-			close(errC)
-			break loop
 		case dest = <-s.req:
 		case r, dataOk := <-data:
+			if !dataOk {
+				close(s.eofC)
+				break loop
+			}
 			err := r.err
 			if dest != nil {
 				if err == nil {
@@ -450,27 +457,16 @@ loop:
 			} else if s.forward != nil {
 				s.forward.Write(r.data)
 			}
-			if dataOk {
-				data <- readResult{}
-			} else {
-				data = nil
-			}
+			data <- readResult{}
 			if dest != nil {
 				select {
 				case s.input <- readResult{dest, err}:
-					if r.err != nil {
-						break loop
-					}
 				case b := <-s.req:
 					if s.forward != nil {
 						s.forward.Write(dest)
 					}
 					dest = b
 				}
-			}
-			if r.err != nil && errC == nil {
-				termErr = r.err
-				errC = s.errC
 			}
 		}
 	}
