@@ -440,6 +440,7 @@ loop:
 		select {
 		case dest = <-s.req:
 		case r, dataOk := <-data:
+		again:
 			if !dataOk {
 				close(s.eofC)
 				break loop
@@ -460,6 +461,9 @@ loop:
 			data <- readResult{}
 			if dest != nil {
 				select {
+				case r, dataOk = <-data:
+					// process newly arrived data before handing data up
+					goto again
 				case s.input <- readResult{dest, err}:
 				case b := <-s.req:
 					if s.forward != nil {
