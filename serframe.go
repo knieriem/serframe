@@ -122,23 +122,26 @@ func (s *Stream) StartReception(buf []byte, opts ...ReceptionOption) error {
 	if s.eof {
 		return io.EOF
 	}
-	select {
-	case <-s.eofC:
-		s.eof = true
-		return io.EOF
-	default:
-		s.curParams.setup(&s.globalParams, opts...)
-		s.buf = buf[:0:len(buf)]
-		s.req <- s.buf
-	}
-	return nil
+	s.curParams.setup(&s.globalParams, opts...)
+	s.buf = buf[:0:len(buf)]
+	return s.reqRcpt(s.buf)
 }
 
 // CancelReception reverts a previous call to StartReception.
 // It should be called in case ReadFrame won't be called
 // for some reason.
 func (s *Stream) CancelReception() {
-	s.req <- nil
+	s.reqRcpt(nil)
+}
+
+func (s *Stream) reqRcpt(buf []byte) error {
+	select {
+	case <-s.eofC:
+		s.eof = true
+		return io.EOF
+	case s.req <- buf:
+	}
+	return nil
 }
 
 type ReceptionOption func(*receptionParams)
