@@ -345,7 +345,10 @@ readLoop:
 						}
 					}
 					if !bytes.Equal(s.buf[echoPrefixLen:nEcho], par.expectedEcho) {
-						err = ErrEchoMismatch
+						err = &LocalEchoMismatchError{
+							Want: par.expectedEcho,
+							Got:  s.buf[echoPrefixLen:nEcho],
+						}
 						break readLoop
 					}
 					nSkip = nEcho
@@ -369,15 +372,21 @@ readLoop:
 			if par.expectedEcho != nil {
 				if len(s.buf) != 0 {
 					if echoSkipInitialNullBytes {
-						for _, b := range s.buf {
+						for i, b := range s.buf {
 							if b != 0 {
-								err = ErrInvalidEchoLen
+								err = &LocalEchoMismatchError{
+									Want: par.expectedEcho,
+									Got:  s.buf[i:],
+								}
 								break readLoop
 							}
 						}
 						err = ErrTimeout
 					}
-					err = ErrInvalidEchoLen
+					err = &LocalEchoMismatchError{
+						Want: par.expectedEcho,
+						Got:  s.buf,
+					}
 				} else {
 					err = ErrTimeout
 				}
@@ -486,8 +495,6 @@ loop:
 }
 
 var ErrTimeout = Error("timeout")
-var ErrEchoMismatch = Error("local echo mismatch")
-var ErrInvalidEchoLen = Error("invalid local echo length")
 var ErrOverflow = Error("receive buffer overflow")
 var ErrUnexpectedReply = Error("unexpected reply")
 
@@ -495,6 +502,24 @@ type Error string
 
 func (e Error) Error() string {
 	return "serframe: " + string(e)
+}
+
+type LocalEchoMismatchError struct {
+	Want, Got []byte
+}
+
+func (e *LocalEchoMismatchError) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
+	if e.tooShort() {
+		return "invalid local echo length"
+	}
+	return "local echo mismatch"
+}
+
+func (e *LocalEchoMismatchError) tooShort() bool {
+	return len(e.Got) < len(e.Want)
 }
 
 // timer wraps a time.Timer, deferring initialization
