@@ -411,19 +411,25 @@ type readResult struct {
 	err  error
 }
 
+const maxConsecutiveReadErrors = 8
+
 func (s *Stream) handle(exitC chan<- error) {
 	var dest []byte
 
 	data := make(chan readResult)
 	go func() {
+		nErr := 0
 		for {
 			isEOF := false
 			buf, err := s.readBytesInternal()
 			if err != nil {
-				if err == io.EOF || requiresTermination(err) {
+				nErr++
+				if err == io.EOF || requiresTermination(err) || nErr > maxConsecutiveReadErrors {
 					isEOF = true
 					err = nil
 				}
+			} else {
+				nErr = 0
 			}
 			if len(buf) != 0 {
 				data <- readResult{buf, err}
