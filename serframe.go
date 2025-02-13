@@ -3,7 +3,6 @@ package serframe
 import (
 	"bytes"
 	"context"
-	"errors"
 	"io"
 	"time"
 )
@@ -421,7 +420,7 @@ func (s *Stream) handle(exitC chan<- error) {
 			isEOF := false
 			buf, err := s.readBytesInternal()
 			if err != nil {
-				if errors.Is(err, io.EOF) {
+				if err == io.EOF || requiresTermination(err) {
 					isEOF = true
 					err = nil
 				}
