@@ -327,17 +327,15 @@ readLoop:
 		reeval:
 			if par.expectedEcho != nil {
 				echoPrefixLen := 0
-				if echoSkipInitialNullBytes && len(s.buf) >= 2 {
-					for i, b := range s.buf {
+				if echoSkipInitialNullBytes && len(s.buf) > 0 {
+					for _, b := range s.buf {
 						if b == 0 {
+							echoPrefixLen++
 							continue
 						}
-						if b == par.expectedEcho[0] {
-							echoPrefixLen = i
-						}
+						echoSkipInitialNullBytes = false
 						break
 					}
-					echoSkipInitialNullBytes = false
 				}
 				nEcho := echoPrefixLen + len(par.expectedEcho)
 				if len(s.buf) >= nEcho {
