@@ -154,6 +154,7 @@ type receptionParams struct {
 	expectedEcho             []byte
 	echoSkipInitialNullBytes bool
 	expectNoReply            bool
+	expectEchoOnly           bool
 }
 
 func (p *receptionParams) setup(dflt *receptionParams, opts ...ReceptionOption) *receptionParams {
@@ -283,6 +284,9 @@ func (s *Stream) ReadFrame(ctx context.Context, opts ...ReceptionOption) ([]byte
 		return nil, io.EOF
 	}
 	par := s.curParams.setup(nil, opts...)
+	if par.expectEchoOnly && par.expectedEcho == nil {
+		return nil, s.reqRcpt(nil)
+	}
 	frameStatus := None
 	if par.intercept == nil {
 		frameStatus = Complete
@@ -356,6 +360,9 @@ readLoop:
 					if len(tail) != 0 {
 						goto reeval
 					}
+					if par.expectEchoOnly {
+						break readLoop
+					}
 				}
 				timeout.Reset(par.tMax)
 				break
@@ -413,6 +420,23 @@ readLoop:
 		return nil, ErrTimeout
 	}
 	return data, err
+}
+
+// ExpectEcho waits until the byte sequence specified via [WithLocalEcho]
+// in the preceding call to [Stream.StartReception] has been received.
+// If no echo data was specified, ExpectEcho returns immediately.
+// A typical use case is to wait until a sync preamble has been fully transmitted,
+// allowing actions such as parity switching to be performed afterward.
+func (s *Stream) ExpectEcho(ctx context.Context) error {
+	_, err := s.ReadFrame(ctx, expectEchoOnly())
+	return err
+}
+
+func expectEchoOnly() ReceptionOption {
+	return func(p *receptionParams) {
+		p.expectEchoOnly = true
+		p.expectNoReply = true
+	}
 }
 
 type readResult struct {
